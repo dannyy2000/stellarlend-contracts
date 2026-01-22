@@ -14,18 +14,18 @@ impl HelloContract {
     }
 
     /// Deposit collateral into the protocol
-    /// 
+    ///
     /// Allows users to deposit assets as collateral in the protocol.
     /// Supports multiple asset types including XLM (native) and token contracts (USDC, etc.).
-    /// 
+    ///
     /// # Arguments
     /// * `user` - The address of the user depositing collateral
     /// * `asset` - The address of the asset contract to deposit (None for native XLM)
     /// * `amount` - The amount to deposit
-    /// 
+    ///
     /// # Returns
     /// Returns the updated collateral balance for the user
-    /// 
+    ///
     /// # Events
     /// Emits the following events:
     /// - `deposit`: Deposit transaction event

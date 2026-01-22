@@ -1,7 +1,5 @@
 #![allow(unused)]
-use soroban_sdk::{
-    contracterror, contracttype, Address, Env, Map, Symbol, Vec, IntoVal, Val,
-};
+use soroban_sdk::{contracterror, contracttype, Address, Env, IntoVal, Map, Symbol, Val, Vec};
 
 /// Errors that can occur during deposit operations
 #[contracterror]
@@ -135,18 +133,18 @@ pub struct ProtocolAnalytics {
 }
 
 /// Deposit collateral function
-/// 
+///
 /// Allows users to deposit assets as collateral in the protocol.
-/// 
+///
 /// # Arguments
 /// * `env` - The Soroban environment
 /// * `user` - The address of the user depositing collateral
 /// * `asset` - The address of the asset contract to deposit (None for native XLM)
 /// * `amount` - The amount to deposit
-/// 
+///
 /// # Returns
 /// Returns the updated collateral balance for the user
-/// 
+///
 /// # Errors
 /// * `DepositError::InvalidAmount` - If amount is zero or negative
 /// * `DepositError::InvalidAsset` - If asset address is invalid
@@ -154,7 +152,7 @@ pub struct ProtocolAnalytics {
 /// * `DepositError::DepositPaused` - If deposits are paused
 /// * `DepositError::AssetNotEnabled` - If asset is not enabled for deposits
 /// * `DepositError::Overflow` - If calculation overflow occurs
-/// 
+///
 /// # Security
 /// * Validates deposit amount > 0
 /// * Checks pause switches
@@ -176,7 +174,11 @@ pub fn deposit_collateral(
 
     // Check if deposits are paused
     let pause_switches_key = DepositDataKey::PauseSwitches;
-    if let Some(pause_map) = env.storage().persistent().get::<DepositDataKey, Map<Symbol, bool>>(&pause_switches_key) {
+    if let Some(pause_map) = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, Map<Symbol, bool>>(&pause_switches_key)
+    {
         if let Some(paused) = pause_map.get(Symbol::new(env, "pause_deposit")) {
             if paused {
                 return Err(DepositError::DepositPaused);
@@ -196,11 +198,15 @@ pub fn deposit_collateral(
 
         // Check asset parameters
         let asset_params_key = DepositDataKey::AssetParams(asset_addr.clone());
-        if let Some(params) = env.storage().persistent().get::<DepositDataKey, AssetParams>(&asset_params_key) {
+        if let Some(params) = env
+            .storage()
+            .persistent()
+            .get::<DepositDataKey, AssetParams>(&asset_params_key)
+        {
             if !params.deposit_enabled {
                 return Err(DepositError::AssetNotEnabled);
             }
-            
+
             // Check max deposit limit
             if params.max_deposit > 0 && amount > params.max_deposit {
                 return Err(DepositError::InvalidAmount);
@@ -210,7 +216,7 @@ pub fn deposit_collateral(
         // Transfer tokens from user to contract using token contract
         // Use the token contract's transfer_from method
         let token_client = soroban_sdk::token::Client::new(env, asset_addr);
-        
+
         // Check user balance
         let user_balance = token_client.balance(&user);
         if user_balance < amount {
@@ -234,6 +240,7 @@ pub fn deposit_collateral(
 
     // Get or create user position
     let position_key = DepositDataKey::Position(user.clone());
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let mut position = env
         .storage()
         .persistent()
@@ -259,8 +266,10 @@ pub fn deposit_collateral(
         .ok_or(DepositError::Overflow)?;
 
     // Update storage
-    env.storage().persistent().set(&collateral_key, &new_collateral);
-    
+    env.storage()
+        .persistent()
+        .set(&collateral_key, &new_collateral);
+
     // Update position
     position.collateral = new_collateral;
     position.last_accrual_time = timestamp;
@@ -273,7 +282,14 @@ pub fn deposit_collateral(
     update_protocol_analytics(env, amount, true)?;
 
     // Add to activity log
-    add_activity_log(env, &user, Symbol::new(env, "deposit"), amount, asset.clone(), timestamp)?;
+    add_activity_log(
+        env,
+        &user,
+        Symbol::new(env, "deposit"),
+        amount,
+        asset.clone(),
+        timestamp,
+    )?;
 
     // Emit deposit event
     emit_deposit_event(env, &user, asset, amount, timestamp);
@@ -299,6 +315,7 @@ fn update_user_analytics(
     is_deposit: bool,
 ) -> Result<(), DepositError> {
     let analytics_key = DepositDataKey::UserAnalytics(user.clone());
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let mut analytics = env
         .storage()
         .persistent()
@@ -330,7 +347,7 @@ fn update_user_analytics(
             .ok_or(DepositError::Overflow)?;
     }
 
-    analytics.transaction_count = analytics.transaction_count.checked_add(1).unwrap_or(u64::MAX);
+    analytics.transaction_count = analytics.transaction_count.saturating_add(1);
     analytics.last_activity = timestamp;
 
     env.storage().persistent().set(&analytics_key, &analytics);
@@ -348,7 +365,7 @@ fn update_protocol_analytics(
         .storage()
         .persistent()
         .get::<DepositDataKey, ProtocolAnalytics>(&analytics_key)
-        .unwrap_or_else(|| ProtocolAnalytics {
+        .unwrap_or(ProtocolAnalytics {
             total_deposits: 0,
             total_borrows: 0,
             total_value_locked: 0,
