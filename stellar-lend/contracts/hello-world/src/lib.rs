@@ -10,6 +10,9 @@ use withdraw::withdraw_collateral;
 mod repay;
 use repay::repay_debt;
 
+mod borrow;
+use borrow::borrow_asset;
+
 #[contract]
 pub struct HelloContract;
 
@@ -105,6 +108,32 @@ impl HelloContract {
         amount: i128,
     ) -> (i128, i128, i128) {
         repay_debt(&env, user, asset, amount).unwrap_or_else(|e| panic!("Repay error: {:?}", e))
+    }
+
+    /// Borrow assets from the protocol
+    ///
+    /// Allows users to borrow assets against their deposited collateral, subject to:
+    /// - Sufficient collateral balance
+    /// - Minimum collateral ratio requirements
+    /// - Pause switch checks
+    /// - Maximum borrow limits
+    ///
+    /// # Arguments
+    /// * `user` - The address of the user borrowing assets
+    /// * `asset` - The address of the asset contract to borrow (None for native XLM)
+    /// * `amount` - The amount to borrow
+    ///
+    /// # Returns
+    /// Returns the updated total debt (principal + interest) for the user
+    ///
+    /// # Events
+    /// Emits the following events:
+    /// - `borrow`: Borrow transaction event
+    /// - `position_updated`: User position update event
+    /// - `analytics_updated`: Analytics update event
+    /// - `user_activity_tracked`: User activity tracking event
+    pub fn borrow_asset(env: Env, user: Address, asset: Option<Address>, amount: i128) -> i128 {
+        borrow_asset(&env, user, asset, amount).unwrap_or_else(|e| panic!("Borrow error: {:?}", e))
     }
 }
 
