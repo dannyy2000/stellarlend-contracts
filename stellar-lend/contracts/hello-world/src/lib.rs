@@ -1,4 +1,6 @@
 use soroban_sdk::{contract, contractimpl, Address, Env, Map, String, Symbol};
+#![no_std]
+use soroban_sdk::{contract, contractimpl, Address, Env, Map, String, Symbol, Vec};
 
 mod borrow;
 mod deposit;
@@ -19,9 +21,32 @@ use risk_management::{
 };
 use withdraw::withdraw_collateral;
 
+mod repay;
+use repay::repay_debt;
+
+mod borrow;
+use borrow::borrow_asset;
+
+mod cross_asset;
+use cross_asset::{
+    cross_asset_borrow, cross_asset_deposit, cross_asset_repay, cross_asset_withdraw,
+    get_asset_config_by_address, get_asset_list, get_user_asset_position,
+    get_user_position_summary, initialize, initialize_asset, update_asset_config,
+    update_asset_price, AssetConfig, AssetKey, AssetPosition, CrossAssetError, UserPositionSummary,
+};
+
+mod oracle;
+use oracle::{configure_oracle, get_price, set_fallback_oracle, update_price_feed, OracleConfig};
+
+mod flash_loan;
+use flash_loan::{
+    configure_flash_loan, execute_flash_loan, repay_flash_loan, set_flash_loan_fee, FlashLoanConfig,
+};
+
 #[contract]
 pub struct HelloContract;
 
+#[allow(clippy::too_many_arguments)]
 #[contractimpl]
 impl HelloContract {
     pub fn hello(env: Env) -> String {
@@ -357,7 +382,261 @@ impl HelloContract {
     pub fn borrow_asset(env: Env, user: Address, asset: Option<Address>, amount: i128) -> i128 {
         borrow_asset(&env, user, asset, amount).unwrap_or_else(|e| panic!("Borrow error: {:?}", e))
     }
+
+    // ============================================================================
+    // CROSS-ASSET OPERATIONS
+    // ============================================================================
+
+    /// Initialize admin one time
+    pub fn initialize_ca(env: Env, admin: Address) -> Result<(), CrossAssetError> {
+        initialize(&env, admin)
+    }
+
+    /// Initialize asset configuration (admin only)
+    pub fn initialize_asset(
+        env: Env,
+        asset: Option<Address>,
+        config: AssetConfig,
+    ) -> Result<(), CrossAssetError> {
+        initialize_asset(&env, asset, config)
+    }
+
+    /// Update asset parameters (admin only)
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_asset_config(
+        env: Env,
+        asset: Option<Address>,
+        collateral_factor: Option<i128>,
+        borrow_factor: Option<i128>,
+        max_supply: Option<i128>,
+        max_borrow: Option<i128>,
+        can_collateralize: Option<bool>,
+        can_borrow: Option<bool>,
+    ) -> Result<(), CrossAssetError> {
+        update_asset_config(
+            &env,
+            asset,
+            collateral_factor,
+            borrow_factor,
+            max_supply,
+            max_borrow,
+            can_collateralize,
+            can_borrow,
+        )
+    }
+
+    /// Update asset price (admin)
+    pub fn update_asset_price(
+        env: Env,
+        asset: Option<Address>,
+        price: i128,
+    ) -> Result<(), CrossAssetError> {
+        update_asset_price(&env, asset, price)
+    }
+
+    /// Get user position for specific asset
+    pub fn get_user_asset_position(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+    ) -> AssetPosition {
+        get_user_asset_position(&env, &user, asset)
+    }
+
+    /// Get unified position summary across all assets
+    /// Returns total collateral, debt, health factor, and liquidation status
+    pub fn get_user_position_summary(env: Env, user: Address) -> UserPositionSummary {
+        get_user_position_summary(&env, &user)
+            .unwrap_or_else(|e| panic!("User position summary error: {:?}", e))
+    }
+
+    /// Deposit collateral with supply cap validation
+    pub fn ca_deposit_collateral(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<AssetPosition, CrossAssetError> {
+        cross_asset_deposit(&env, user, asset, amount)
+    }
+
+    /// Withdraw collateral with health factor check
+    pub fn ca_withdraw_collateral(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<AssetPosition, CrossAssetError> {
+        cross_asset_withdraw(&env, user, asset, amount)
+    }
+
+    /// Borrow assets against multi-asset collateral
+    pub fn ca_borrow_asset(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<AssetPosition, CrossAssetError> {
+        cross_asset_borrow(&env, user, asset, amount)
+    }
+
+    /// Repay debt (interest paid first, then principal)
+    pub fn ca_repay_debt(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<AssetPosition, CrossAssetError> {
+        cross_asset_repay(&env, user, asset, amount)
+    }
+
+    /// Get list of all configured assets
+    pub fn get_asset_list(env: Env) -> Vec<AssetKey> {
+        get_asset_list(&env)
+    }
+
+    /// Get asset configuration
+    pub fn get_asset_config(
+        env: Env,
+        asset: Option<Address>,
+    ) -> Result<AssetConfig, CrossAssetError> {
+        get_asset_config_by_address(&env, asset)
+    }
+
+    // ============================================================================
+    /// Update price feed from oracle
+    ///
+    /// Updates the price for an asset from an oracle source with validation.
+    ///
+    /// # Arguments
+    /// * `caller` - The address calling this function (must be admin or oracle)
+    /// * `asset` - The asset address
+    /// * `price` - The new price
+    /// * `decimals` - Price decimals
+    /// * `oracle` - The oracle address providing this price
+    ///
+    /// # Returns
+    /// Returns the updated price
+    ///
+    /// # Events
+    /// Emits `price_updated` event
+    pub fn update_price_feed(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        price: i128,
+        decimals: u32,
+        oracle: Address,
+    ) -> i128 {
+        update_price_feed(&env, caller, asset, price, decimals, oracle)
+            .unwrap_or_else(|e| panic!("Oracle error: {:?}", e))
+    }
+
+    /// Get price for an asset
+    ///
+    /// Retrieves the current price for an asset, using cache or fallback if needed.
+    ///
+    /// # Arguments
+    /// * `asset` - The asset address
+    ///
+    /// # Returns
+    /// Returns the current price
+    pub fn get_price(env: Env, asset: Address) -> i128 {
+        get_price(&env, &asset).unwrap_or_else(|e| panic!("Oracle error: {:?}", e))
+    }
+
+    /// Set fallback oracle for an asset (admin only)
+    ///
+    /// # Arguments
+    /// * `caller` - The caller address (must be admin)
+    /// * `asset` - The asset address
+    /// * `fallback_oracle` - The fallback oracle address
+    pub fn set_fallback_oracle(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        fallback_oracle: Address,
+    ) {
+        set_fallback_oracle(&env, caller, asset, fallback_oracle)
+            .unwrap_or_else(|e| panic!("Oracle error: {:?}", e))
+    }
+
+    /// Configure oracle parameters (admin only)
+    ///
+    /// # Arguments
+    /// * `caller` - The caller address (must be admin)
+    /// * `config` - The new oracle configuration
+    pub fn configure_oracle(env: Env, caller: Address, config: OracleConfig) {
+        configure_oracle(&env, caller, config).unwrap_or_else(|e| panic!("Oracle error: {:?}", e))
+    }
+
+    /// Execute flash loan
+    ///
+    /// Allows users to borrow assets without collateral for a single transaction.
+    /// The loan must be repaid (with fee) within the same transaction.
+    ///
+    /// # Arguments
+    /// * `user` - The address borrowing the flash loan
+    /// * `asset` - The address of the asset contract to borrow
+    /// * `amount` - The amount to borrow
+    /// * `callback` - The callback contract address that will handle repayment
+    ///
+    /// # Returns
+    /// Returns the total amount to repay (principal + fee)
+    ///
+    /// # Events
+    /// Emits `flash_loan_initiated` event
+    pub fn execute_flash_loan(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+        callback: Address,
+    ) -> i128 {
+        execute_flash_loan(&env, user, asset, amount, callback)
+            .unwrap_or_else(|e| panic!("Flash loan error: {:?}", e))
+    }
+
+    /// Repay flash loan
+    ///
+    /// Must be called within the same transaction as the flash loan.
+    /// Validates that the full amount (principal + fee) is repaid.
+    ///
+    /// # Arguments
+    /// * `user` - The address repaying the flash loan
+    /// * `asset` - The address of the asset contract
+    /// * `amount` - The amount being repaid (should equal principal + fee)
+    ///
+    /// # Events
+    /// Emits `flash_loan_repaid` event
+    pub fn repay_flash_loan(env: Env, user: Address, asset: Address, amount: i128) {
+        repay_flash_loan(&env, user, asset, amount)
+            .unwrap_or_else(|e| panic!("Flash loan error: {:?}", e))
+    }
+
+    /// Set flash loan fee (admin only)
+    ///
+    /// # Arguments
+    /// * `caller` - The caller address (must be admin)
+    /// * `fee_bps` - The new fee in basis points
+    pub fn set_flash_loan_fee(env: Env, caller: Address, fee_bps: i128) {
+        set_flash_loan_fee(&env, caller, fee_bps)
+            .unwrap_or_else(|e| panic!("Flash loan error: {:?}", e))
+    }
+
+    /// Configure flash loan parameters (admin only)
+    ///
+    /// # Arguments
+    /// * `caller` - The caller address (must be admin)
+    /// * `config` - The new flash loan configuration
+    pub fn configure_flash_loan(env: Env, caller: Address, config: FlashLoanConfig) {
+        configure_flash_loan(&env, caller, config)
+            .unwrap_or_else(|e| panic!("Flash loan error: {:?}", e))
+    }
 }
 
 #[cfg(test)]
-mod test;
+mod tests {
+    mod test;
+    // mod test_cross_asset;
+}
