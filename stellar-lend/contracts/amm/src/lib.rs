@@ -3,9 +3,9 @@ use soroban_sdk::{contract, contractimpl, Address, Env, Map};
 
 mod amm;
 use amm::{
-    execute_swap, add_liquidity, remove_liquidity, validate_amm_callback, auto_swap_for_collateral,
-    initialize_amm_settings, add_amm_protocol, update_amm_settings,
-    SwapParams, LiquidityParams, AmmProtocolConfig, AmmSettings, AmmCallbackData, AmmError,
+    add_amm_protocol, add_liquidity, auto_swap_for_collateral, execute_swap,
+    initialize_amm_settings, remove_liquidity, update_amm_settings, validate_amm_callback,
+    AmmCallbackData, AmmError, AmmProtocolConfig, AmmSettings, LiquidityParams, SwapParams,
 };
 
 #[contract]
@@ -32,7 +32,13 @@ impl AmmContract {
         max_slippage: i128,
         auto_swap_threshold: i128,
     ) -> Result<(), AmmError> {
-        initialize_amm_settings(&env, admin, default_slippage, max_slippage, auto_swap_threshold)
+        initialize_amm_settings(
+            &env,
+            admin,
+            default_slippage,
+            max_slippage,
+            auto_swap_threshold,
+        )
     }
 
     /// Add AMM protocol (admin only)
@@ -235,7 +241,11 @@ impl AmmContract {
     ///
     /// # Returns
     /// Returns a vector of swap records
-    pub fn get_swap_history(env: Env, user: Option<Address>, limit: u32) -> Option<soroban_sdk::Vec<amm::SwapRecord>> {
+    pub fn get_swap_history(
+        env: Env,
+        user: Option<Address>,
+        limit: u32,
+    ) -> Option<soroban_sdk::Vec<amm::SwapRecord>> {
         amm::get_swap_history(&env, user, limit).ok()
     }
 
@@ -249,7 +259,11 @@ impl AmmContract {
     ///
     /// # Returns
     /// Returns a vector of liquidity records
-    pub fn get_liquidity_history(env: Env, user: Option<Address>, limit: u32) -> Option<soroban_sdk::Vec<amm::LiquidityRecord>> {
+    pub fn get_liquidity_history(
+        env: Env,
+        user: Option<Address>,
+        limit: u32,
+    ) -> Option<soroban_sdk::Vec<amm::LiquidityRecord>> {
         amm::get_liquidity_history(&env, user, limit).ok()
     }
 }

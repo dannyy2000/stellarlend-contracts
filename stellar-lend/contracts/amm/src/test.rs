@@ -2,10 +2,7 @@
 
 use super::*;
 use crate::amm::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env, Symbol, Vec,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, Vec};
 
 fn create_amm_contract<'a>(env: &Env) -> AmmContractClient<'a> {
     AmmContractClient::new(env, &env.register(AmmContract {}, ()))
@@ -14,7 +11,7 @@ fn create_amm_contract<'a>(env: &Env) -> AmmContractClient<'a> {
 fn create_test_protocol_config(env: &Env, protocol_addr: &Address) -> AmmProtocolConfig {
     let mut supported_pairs = Vec::new(env);
     supported_pairs.push_back(TokenPair {
-        token_a: None, // Native XLM
+        token_a: None,                         // Native XLM
         token_b: Some(Address::generate(env)), // Mock USDC
         pool_address: Address::generate(env),
     });
@@ -40,8 +37,7 @@ fn test_initialize_amm_settings() {
 
     // Initialize AMM settings - this should not panic
     contract.initialize_amm_settings(
-        &admin,
-        &100,   // 1% default slippage
+        &admin, &100,   // 1% default slippage
         &1000,  // 10% max slippage
         &10000, // 10000 auto-swap threshold
     );
@@ -120,7 +116,7 @@ fn test_get_amm_settings_empty() {
     env.mock_all_auths();
 
     let contract = create_amm_contract(&env);
-    
+
     // Should return None when not initialized
     let settings = contract.get_amm_settings();
     assert!(settings.is_none());
@@ -133,10 +129,10 @@ fn test_get_amm_protocols_empty() {
 
     let contract = create_amm_contract(&env);
     let admin = Address::generate(&env);
-    
+
     // Initialize first
     contract.initialize_amm_settings(&admin, &100, &1000, &10000);
-    
+
     // Should return empty map when no protocols added
     let protocols = contract.get_amm_protocols();
     assert!(protocols.is_some());
@@ -151,7 +147,7 @@ fn test_get_swap_history_empty() {
 
     let contract = create_amm_contract(&env);
     let user = Address::generate(&env);
-    
+
     // Should return empty history when no swaps performed
     let history = contract.get_swap_history(&Some(user), &10);
     assert!(history.is_some());
@@ -166,7 +162,7 @@ fn test_get_liquidity_history_empty() {
 
     let contract = create_amm_contract(&env);
     let user = Address::generate(&env);
-    
+
     // Should return empty history when no liquidity operations performed
     let history = contract.get_liquidity_history(&Some(user), &10);
     assert!(history.is_some());
@@ -191,20 +187,20 @@ fn test_multiple_protocol_registration() {
 
     let contract = create_amm_contract(&env);
     let admin = Address::generate(&env);
-    
+
     // Initialize
     contract.initialize_amm_settings(&admin, &100, &1000, &10000);
-    
+
     // Add multiple protocols
     let protocol1 = Address::generate(&env);
     let protocol2 = Address::generate(&env);
-    
+
     let config1 = create_test_protocol_config(&env, &protocol1);
     let config2 = create_test_protocol_config(&env, &protocol2);
-    
+
     contract.add_amm_protocol(&admin, &config1);
     contract.add_amm_protocol(&admin, &config2);
-    
+
     // Verify both protocols were added
     let protocols = contract.get_amm_protocols().unwrap();
     assert_eq!(protocols.len(), 2);
@@ -219,10 +215,10 @@ fn test_settings_persistence() {
 
     let contract = create_amm_contract(&env);
     let admin = Address::generate(&env);
-    
+
     // Initialize with specific values
     contract.initialize_amm_settings(&admin, &150, &1500, &25000);
-    
+
     // Verify values persist
     let settings = contract.get_amm_settings().unwrap();
     assert_eq!(settings.default_slippage, 150);

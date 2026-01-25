@@ -224,31 +224,27 @@ pub struct AmmCallbackData {
 ///
 /// # Events
 /// Emits swap_executed, position_updated, and amm_operation events
-pub fn execute_swap(
-    env: &Env,
-    user: Address,
-    params: SwapParams,
-) -> Result<i128, AmmError> {
+pub fn execute_swap(env: &Env, user: Address, params: SwapParams) -> Result<i128, AmmError> {
     // Validate swap parameters
     validate_swap_params(env, &params)?;
-    
+
     // Check if swaps are enabled
     check_swap_enabled(env)?;
-    
+
     // Check deadline
     if env.ledger().timestamp() > params.deadline {
         return Err(AmmError::SlippageExceeded);
     }
-    
+
     // Get AMM protocol configuration
     let protocol_config = get_amm_protocol_config(env, &params.protocol)?;
-    
+
     // Validate token pair is supported
     validate_token_pair(env, &protocol_config, &params.token_in, &params.token_out)?;
-    
+
     // Generate callback nonce for validation
     let nonce = generate_callback_nonce(env, &user);
-    
+
     // Prepare callback data
     let callback_data = AmmCallbackData {
         nonce,
@@ -262,26 +258,32 @@ pub fn execute_swap(
         },
         deadline: params.deadline,
     };
-    
+
     // Execute the actual swap through AMM protocol
     let amount_out = execute_amm_swap(env, &params, &callback_data)?;
-    
+
     // Validate minimum output
     if amount_out < params.min_amount_out {
         return Err(AmmError::MinOutputNotMet);
     }
-    
+
     // Calculate effective price and fees
     let effective_price = calculate_effective_price(params.amount_in, amount_out)?;
     let fees_paid = calculate_swap_fees(&protocol_config, params.amount_in)?;
-    
+
     // Record swap in history
     record_swap(env, &user, &params, amount_out, effective_price, fees_paid)?;
-    
+
     // Emit events
     emit_swap_executed_event(env, &user, &params, amount_out, effective_price);
-    emit_amm_operation_event(env, &user, Symbol::new(env, "swap"), params.amount_in, amount_out);
-    
+    emit_amm_operation_event(
+        env,
+        &user,
+        Symbol::new(env, "swap"),
+        params.amount_in,
+        amount_out,
+    );
+
     Ok(amount_out)
 }
 
@@ -296,31 +298,27 @@ pub fn execute_swap(
 ///
 /// # Returns
 /// Returns the amount of LP tokens received
-pub fn add_liquidity(
-    env: &Env,
-    user: Address,
-    params: LiquidityParams,
-) -> Result<i128, AmmError> {
+pub fn add_liquidity(env: &Env, user: Address, params: LiquidityParams) -> Result<i128, AmmError> {
     // Validate liquidity parameters
     validate_liquidity_params(env, &params)?;
-    
+
     // Check if liquidity operations are enabled
     check_liquidity_enabled(env)?;
-    
+
     // Check deadline
     if env.ledger().timestamp() > params.deadline {
         return Err(AmmError::SlippageExceeded);
     }
-    
+
     // Get AMM protocol configuration
     let protocol_config = get_amm_protocol_config(env, &params.protocol)?;
-    
+
     // Validate token pair is supported
     validate_token_pair(env, &protocol_config, &params.token_a, &params.token_b)?;
-    
+
     // Generate callback nonce
     let nonce = generate_callback_nonce(env, &user);
-    
+
     // Prepare callback data
     let callback_data = AmmCallbackData {
         nonce,
@@ -334,23 +332,23 @@ pub fn add_liquidity(
         },
         deadline: params.deadline,
     };
-    
+
     // Execute liquidity addition through AMM protocol
     let lp_tokens = execute_amm_add_liquidity(env, &params, &callback_data)?;
-    
+
     // Record liquidity operation
-    record_liquidity_operation(
-        env,
-        &user,
-        Symbol::new(env, "add"),
-        &params,
-        lp_tokens,
-    )?;
-    
+    record_liquidity_operation(env, &user, Symbol::new(env, "add"), &params, lp_tokens)?;
+
     // Emit events
     emit_liquidity_added_event(env, &user, &params, lp_tokens);
-    emit_amm_operation_event(env, &user, Symbol::new(env, "add_liquidity"), params.amount_a, lp_tokens);
-    
+    emit_amm_operation_event(
+        env,
+        &user,
+        Symbol::new(env, "add_liquidity"),
+        params.amount_a,
+        lp_tokens,
+    );
+
     Ok(lp_tokens)
 }
 
@@ -384,26 +382,26 @@ pub fn remove_liquidity(
 ) -> Result<(i128, i128), AmmError> {
     // Check if liquidity operations are enabled
     check_liquidity_enabled(env)?;
-    
+
     // Check deadline
     if env.ledger().timestamp() > deadline {
         return Err(AmmError::SlippageExceeded);
     }
-    
+
     // Validate parameters
     if lp_tokens <= 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     // Get AMM protocol configuration
     let protocol_config = get_amm_protocol_config(env, &protocol)?;
-    
+
     // Validate token pair is supported
     validate_token_pair(env, &protocol_config, &token_a, &token_b)?;
-    
+
     // Generate callback nonce
     let nonce = generate_callback_nonce(env, &user);
-    
+
     // Prepare callback data
     let callback_data = AmmCallbackData {
         nonce,
@@ -417,7 +415,7 @@ pub fn remove_liquidity(
         },
         deadline,
     };
-    
+
     // Execute liquidity removal through AMM protocol
     let (amount_a, amount_b) = execute_amm_remove_liquidity(
         env,
@@ -429,12 +427,12 @@ pub fn remove_liquidity(
         min_amount_b,
         &callback_data,
     )?;
-    
+
     // Validate minimum outputs
     if amount_a < min_amount_a || amount_b < min_amount_b {
         return Err(AmmError::MinOutputNotMet);
     }
-    
+
     // Create params for recording
     let params = LiquidityParams {
         protocol: protocol.clone(),
@@ -446,20 +444,20 @@ pub fn remove_liquidity(
         min_amount_b,
         deadline,
     };
-    
+
     // Record liquidity operation
-    record_liquidity_operation(
-        env,
-        &user,
-        Symbol::new(env, "remove"),
-        &params,
-        lp_tokens,
-    )?;
-    
+    record_liquidity_operation(env, &user, Symbol::new(env, "remove"), &params, lp_tokens)?;
+
     // Emit events
     emit_liquidity_removed_event(env, &user, &params, lp_tokens);
-    emit_amm_operation_event(env, &user, Symbol::new(env, "remove_liquidity"), lp_tokens, amount_a + amount_b);
-    
+    emit_amm_operation_event(
+        env,
+        &user,
+        Symbol::new(env, "remove_liquidity"),
+        lp_tokens,
+        amount_a + amount_b,
+    );
+
     Ok((amount_a, amount_b))
 }
 
@@ -485,12 +483,12 @@ pub fn validate_amm_callback(
     if !protocols.contains_key(caller.clone()) {
         return Err(AmmError::InvalidCallback);
     }
-    
+
     // Check deadline
     if env.ledger().timestamp() > callback_data.deadline {
         return Err(AmmError::InvalidCallback);
     }
-    
+
     // Validate nonce to prevent replay attacks
     let nonce_key = AmmDataKey::CallbackNonces(callback_data.user.clone());
     let expected_nonce = env
@@ -498,19 +496,19 @@ pub fn validate_amm_callback(
         .persistent()
         .get::<AmmDataKey, u64>(&nonce_key)
         .unwrap_or(0);
-    
+
     if callback_data.nonce != expected_nonce {
         return Err(AmmError::InvalidCallback);
     }
-    
+
     // Increment nonce to prevent reuse
     env.storage()
         .persistent()
         .set(&nonce_key, &(expected_nonce + 1));
-    
+
     // Emit callback validation event
     emit_callback_validated_event(env, &caller, &callback_data);
-    
+
     Ok(())
 }
 
@@ -537,15 +535,15 @@ pub fn auto_swap_for_collateral(
     if !settings.swap_enabled {
         return Err(AmmError::SwapPaused);
     }
-    
+
     // Check if amount meets threshold
     if amount < settings.auto_swap_threshold {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     // Find best AMM protocol for this swap
     let best_protocol = find_best_amm_protocol(env, &None, &target_token, amount)?;
-    
+
     // Create swap parameters with default slippage
     let params = SwapParams {
         protocol: best_protocol,
@@ -556,10 +554,10 @@ pub fn auto_swap_for_collateral(
         slippage_tolerance: settings.default_slippage,
         deadline: env.ledger().timestamp() + 300, // 5 minutes
     };
-    
+
     // Execute the swap
     let amount_out = execute_swap(env, user, params)?;
-    
+
     Ok(amount_out)
 }
 
@@ -570,20 +568,20 @@ fn validate_swap_params(env: &Env, params: &SwapParams) -> Result<(), AmmError> 
     if params.amount_in <= 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     if params.min_amount_out <= 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     if params.token_in == params.token_out {
         return Err(AmmError::InvalidTokenPair);
     }
-    
+
     let settings = get_amm_settings(env)?;
     if params.slippage_tolerance > settings.max_slippage {
         return Err(AmmError::SlippageExceeded);
     }
-    
+
     Ok(())
 }
 
@@ -592,15 +590,15 @@ fn validate_liquidity_params(env: &Env, params: &LiquidityParams) -> Result<(), 
     if params.amount_a <= 0 || params.amount_b <= 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     if params.min_amount_a < 0 || params.min_amount_b < 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     if params.token_a == params.token_b {
         return Err(AmmError::InvalidTokenPair);
     }
-    
+
     Ok(())
 }
 
@@ -656,8 +654,9 @@ fn validate_token_pair(
     token_b: &Option<Address>,
 ) -> Result<(), AmmError> {
     for pair in protocol_config.supported_pairs.iter() {
-        if (pair.token_a == *token_a && pair.token_b == *token_b) ||
-           (pair.token_a == *token_b && pair.token_b == *token_a) {
+        if (pair.token_a == *token_a && pair.token_b == *token_b)
+            || (pair.token_a == *token_b && pair.token_b == *token_a)
+        {
             return Ok(());
         }
     }
@@ -672,7 +671,7 @@ fn generate_callback_nonce(env: &Env, user: &Address) -> u64 {
         .persistent()
         .get::<AmmDataKey, u64>(&nonce_key)
         .unwrap_or(0);
-    
+
     let new_nonce = current_nonce + 1;
     env.storage().persistent().set(&nonce_key, &new_nonce);
     new_nonce
@@ -683,17 +682,20 @@ fn calculate_effective_price(amount_in: i128, amount_out: i128) -> Result<i128, 
     if amount_in == 0 {
         return Err(AmmError::InvalidSwapParams);
     }
-    
+
     // Price = (amount_out / amount_in) * 10^18 for precision
     let price = (amount_out * 1_000_000_000_000_000_000i128)
         .checked_div(amount_in)
         .ok_or(AmmError::Overflow)?;
-    
+
     Ok(price)
 }
 
 /// Calculate swap fees
-fn calculate_swap_fees(protocol_config: &AmmProtocolConfig, amount_in: i128) -> Result<i128, AmmError> {
+fn calculate_swap_fees(
+    protocol_config: &AmmProtocolConfig,
+    amount_in: i128,
+) -> Result<i128, AmmError> {
     let fees = (amount_in * protocol_config.fee_tier)
         .checked_div(10_000)
         .ok_or(AmmError::Overflow)?;
@@ -717,15 +719,15 @@ fn find_best_amm_protocol(
     amount: i128,
 ) -> Result<Address, AmmError> {
     let protocols = get_amm_protocols(env)?;
-    
+
     let mut best_protocol: Option<Address> = None;
     let mut best_output = 0i128;
-    
+
     for (protocol_addr, config) in protocols.iter() {
         if !config.enabled {
             continue;
         }
-        
+
         // Check if protocol supports this token pair
         if validate_token_pair(env, &config, token_in, token_out).is_ok() {
             // For simplicity, we'll use the first valid protocol
@@ -736,7 +738,7 @@ fn find_best_amm_protocol(
             }
         }
     }
-    
+
     best_protocol.ok_or(AmmError::UnsupportedProtocol)
 }
 
@@ -755,10 +757,10 @@ fn execute_amm_swap(
     let amount_out = (params.amount_in * slippage_factor)
         .checked_div(10_000)
         .ok_or(AmmError::Overflow)?;
-    
+
     // Validate callback (this would be called by the AMM protocol)
     validate_amm_callback(env, params.protocol.clone(), callback_data.clone())?;
-    
+
     Ok(amount_out)
 }
 
@@ -770,10 +772,10 @@ fn execute_amm_add_liquidity(
 ) -> Result<i128, AmmError> {
     // Mock implementation
     let lp_tokens = (params.amount_a + params.amount_b) / 2; // Simplified calculation
-    
+
     // Validate callback
     validate_amm_callback(env, params.protocol.clone(), callback_data.clone())?;
-    
+
     Ok(lp_tokens)
 }
 
@@ -791,10 +793,10 @@ fn execute_amm_remove_liquidity(
     // Mock implementation
     let amount_a = lp_tokens; // Simplified
     let amount_b = lp_tokens; // Simplified
-    
+
     // Validate callback
     validate_amm_callback(env, protocol.clone(), callback_data.clone())?;
-    
+
     Ok((amount_a, amount_b))
 }
 
@@ -813,7 +815,7 @@ fn record_swap(
         .persistent()
         .get::<AmmDataKey, Vec<SwapRecord>>(&history_key)
         .unwrap_or_else(|| Vec::new(env));
-    
+
     let record = SwapRecord {
         user: user.clone(),
         protocol: params.protocol.clone(),
@@ -826,14 +828,14 @@ fn record_swap(
         timestamp: env.ledger().timestamp(),
         tx_hash: Symbol::new(env, "mock_tx_hash"), // In reality, this would be the actual tx hash
     };
-    
+
     history.push_back(record);
-    
+
     // Keep only last 1000 records
     if history.len() > 1000 {
         history.pop_front();
     }
-    
+
     env.storage().persistent().set(&history_key, &history);
     Ok(())
 }
@@ -852,7 +854,7 @@ fn record_liquidity_operation(
         .persistent()
         .get::<AmmDataKey, Vec<LiquidityRecord>>(&history_key)
         .unwrap_or_else(|| Vec::new(env));
-    
+
     let record = LiquidityRecord {
         user: user.clone(),
         operation_type,
@@ -864,14 +866,14 @@ fn record_liquidity_operation(
         lp_tokens,
         timestamp: env.ledger().timestamp(),
     };
-    
+
     history.push_back(record);
-    
+
     // Keep only last 1000 records
     if history.len() > 1000 {
         history.pop_front();
     }
-    
+
     env.storage().persistent().set(&history_key, &history);
     Ok(())
 }
@@ -898,7 +900,7 @@ fn emit_swap_executed_event(
     data.push_back(amount_out.into_val(env));
     data.push_back(Symbol::new(env, "effective_price").into_val(env));
     data.push_back(effective_price.into_val(env));
-    
+
     env.events().publish(topics, data);
 }
 
@@ -921,7 +923,7 @@ fn emit_liquidity_added_event(
     data.push_back(params.amount_b.into_val(env));
     data.push_back(Symbol::new(env, "lp_tokens").into_val(env));
     data.push_back(lp_tokens.into_val(env));
-    
+
     env.events().publish(topics, data);
 }
 
@@ -940,7 +942,7 @@ fn emit_liquidity_removed_event(
     data.push_back(params.protocol.clone().into_val(env));
     data.push_back(Symbol::new(env, "lp_tokens").into_val(env));
     data.push_back(lp_tokens.into_val(env));
-    
+
     env.events().publish(topics, data);
 }
 
@@ -964,16 +966,12 @@ fn emit_amm_operation_event(
     data.push_back(amount_out.into_val(env));
     data.push_back(Symbol::new(env, "timestamp").into_val(env));
     data.push_back(env.ledger().timestamp().into_val(env));
-    
+
     env.events().publish(topics, data);
 }
 
 /// Emit callback validated event
-fn emit_callback_validated_event(
-    env: &Env,
-    caller: &Address,
-    callback_data: &AmmCallbackData,
-) {
+fn emit_callback_validated_event(env: &Env, caller: &Address, callback_data: &AmmCallbackData) {
     let topics = (Symbol::new(env, "callback_validated"), caller.clone());
     let mut data: Vec<Val> = Vec::new(env);
     data.push_back(Symbol::new(env, "caller").into_val(env));
@@ -984,7 +982,7 @@ fn emit_callback_validated_event(
     data.push_back(callback_data.operation.clone().into_val(env));
     data.push_back(Symbol::new(env, "nonce").into_val(env));
     data.push_back(callback_data.nonce.into_val(env));
-    
+
     env.events().publish(topics, data);
 }
 
@@ -1001,7 +999,7 @@ pub fn initialize_amm_settings(
     // Set admin
     let admin_key = AmmDataKey::Admin;
     env.storage().persistent().set(&admin_key, &admin);
-    
+
     let settings = AmmSettings {
         default_slippage,
         max_slippage,
@@ -1009,15 +1007,15 @@ pub fn initialize_amm_settings(
         liquidity_enabled: true,
         auto_swap_threshold,
     };
-    
+
     let settings_key = AmmDataKey::AmmSettings;
     env.storage().persistent().set(&settings_key, &settings);
-    
+
     // Initialize empty protocols map
     let protocols_key = AmmDataKey::AmmProtocols;
     let protocols: Map<Address, AmmProtocolConfig> = Map::new(env);
     env.storage().persistent().set(&protocols_key, &protocols);
-    
+
     Ok(())
 }
 
@@ -1029,17 +1027,17 @@ pub fn add_amm_protocol(
 ) -> Result<(), AmmError> {
     // Check admin authorization
     require_admin(env, &admin)?;
-    
+
     let protocols_key = AmmDataKey::AmmProtocols;
     let mut protocols = env
         .storage()
         .persistent()
         .get::<AmmDataKey, Map<Address, AmmProtocolConfig>>(&protocols_key)
         .unwrap_or_else(|| Map::new(env));
-    
+
     protocols.set(protocol_config.protocol_address.clone(), protocol_config);
     env.storage().persistent().set(&protocols_key, &protocols);
-    
+
     Ok(())
 }
 
@@ -1051,10 +1049,10 @@ pub fn update_amm_settings(
 ) -> Result<(), AmmError> {
     // Check admin authorization
     require_admin(env, &admin)?;
-    
+
     let settings_key = AmmDataKey::AmmSettings;
     env.storage().persistent().set(&settings_key, &settings);
-    
+
     Ok(())
 }
 
@@ -1066,7 +1064,7 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), AmmError> {
         .persistent()
         .get::<AmmDataKey, Address>(&admin_key)
         .ok_or(AmmError::Unauthorized)?;
-    
+
     if admin != *caller {
         return Err(AmmError::Unauthorized);
     }
@@ -1087,15 +1085,15 @@ pub fn get_swap_history(
         .persistent()
         .get::<AmmDataKey, Vec<SwapRecord>>(&history_key)
         .unwrap_or_else(|| Vec::new(env));
-    
+
     let mut filtered_history = Vec::new(env);
     let mut count = 0u32;
-    
+
     for record in history.iter().rev() {
         if count >= limit {
             break;
         }
-        
+
         if let Some(ref filter_user) = user {
             if record.user == *filter_user {
                 filtered_history.push_back(record);
@@ -1106,7 +1104,7 @@ pub fn get_swap_history(
             count += 1;
         }
     }
-    
+
     Ok(filtered_history)
 }
 
@@ -1122,15 +1120,15 @@ pub fn get_liquidity_history(
         .persistent()
         .get::<AmmDataKey, Vec<LiquidityRecord>>(&history_key)
         .unwrap_or_else(|| Vec::new(env));
-    
+
     let mut filtered_history = Vec::new(env);
     let mut count = 0u32;
-    
+
     for record in history.iter().rev() {
         if count >= limit {
             break;
         }
-        
+
         if let Some(ref filter_user) = user {
             if record.user == *filter_user {
                 filtered_history.push_back(record);
@@ -1141,6 +1139,6 @@ pub fn get_liquidity_history(
             count += 1;
         }
     }
-    
+
     Ok(filtered_history)
 }
