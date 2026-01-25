@@ -49,14 +49,6 @@ use interest_rate::{
     InterestRateError,
 };
 
-mod cross_asset;
-use cross_asset::{
-    cross_asset_borrow, cross_asset_deposit, cross_asset_repay, cross_asset_withdraw,
-    get_asset_config_by_address, get_asset_list, get_user_asset_position,
-    get_user_position_summary, initialize, initialize_asset, update_asset_config,
-    update_asset_price, AssetConfig, AssetKey, AssetPosition, CrossAssetError, UserPositionSummary,
-};
-
 #[contract]
 pub struct HelloContract;
 
