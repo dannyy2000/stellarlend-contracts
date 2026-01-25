@@ -1,5 +1,4 @@
-
-use soroban_sdk::{contracttype, Address, Symbol, Env};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// A standardized event structure for all protocol actions.
 ///
@@ -21,7 +20,6 @@ pub enum Event {
     Withdrawal(WithdrawalEvent),
     Borrow(BorrowEvent),
     Repay(RepayEvent),
-
 }
 
 /// Event data for a deposit action.
@@ -66,7 +64,6 @@ pub struct RepayEvent {
 
 /// Event data for a liquidation action.
 
-
 /// Publishes an event to the ledger.
 ///
 /// # Arguments
@@ -78,7 +75,6 @@ fn log_event(env: &Env, event: Event) {
         Event::Withdrawal(_) => Symbol::new(env, "withdrawal"),
         Event::Borrow(_) => Symbol::new(env, "borrow"),
         Event::Repay(_) => Symbol::new(env, "repay"),
-
     };
     env.events().publish((event_type,), event);
 }
@@ -99,5 +95,3 @@ pub fn log_borrow(env: &Env, event: BorrowEvent) {
 pub fn log_repay(env: &Env, event: RepayEvent) {
     log_event(env, Event::Repay(event));
 }
-
-
