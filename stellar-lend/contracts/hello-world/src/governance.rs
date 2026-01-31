@@ -1,662 +1,602 @@
-use soroban_sdk::xdr::{ScErrorCode, ScErrorType};
-use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, Error as SdkError, Symbol, Val,
-};
+#![allow(unused)]
+use soroban_sdk::{contracterror, contracttype, Address, Env, IntoVal, Map, Symbol, Vec};
 
-impl From<&GovernanceError> for SdkError {
-    fn from(error: &GovernanceError) -> Self {
-        SdkError::from_type_and_code(ScErrorType::Contract, unsafe {
-            ScErrorCode::try_from(*error as i32).unwrap_unchecked()
-        })
-    }
-}
-
-impl From<SdkError> for GovernanceError {
-    fn from(error: SdkError) -> Self {
-        // Attempt to get the ScError from the SdkError
-        let error_code_val = error.get_code();
-        let error_code: u32 = error_code_val;
-
-        match error_code {
-            100 => GovernanceError::AlreadyInitialized,
-            101 => GovernanceError::NotInitialized,
-            102 => GovernanceError::Unauthorized,
-            103 => GovernanceError::NotFound,
-            104 => GovernanceError::InvalidArguments,
-            105 => GovernanceError::NotYetTime,
-            106 => GovernanceError::ProposalAlreadyExecuted,
-            107 => GovernanceError::ProposalExpired,
-            108 => GovernanceError::VoteAlreadyCast,
-            109 => GovernanceError::InsufficientVotes,
-            110 => GovernanceError::CannotSelfRemove,
-            111 => GovernanceError::SignerAlreadyExists,
-            112 => GovernanceError::SignerNotFound,
-            _ => GovernanceError::InvalidArguments, // Generic fallback
-        }
-    }
-}
-
-// Define errors for the governance contract
-#[contracttype]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+/// Errors that can occur during governance operations
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum GovernanceError {
-    AlreadyInitialized = 100,
-    NotInitialized = 101,
-    Unauthorized = 102,
-    NotFound = 103,
-    InvalidArguments = 104,
-    NotYetTime = 105,
-    ProposalAlreadyExecuted = 106,
-    ProposalExpired = 107,
-    VoteAlreadyCast = 108,
-    InsufficientVotes = 109,
-    CannotSelfRemove = 110,
-    SignerAlreadyExists = 111,
-    SignerNotFound = 112,
+    /// Unauthorized access - caller is not authorized
+    Unauthorized = 1,
+    /// Proposal not found
+    ProposalNotFound = 2,
+    /// Proposal already executed
+    ProposalAlreadyExecuted = 3,
+    /// Proposal already failed
+    ProposalAlreadyFailed = 4,
+    /// Proposal not ready for execution (timelock not expired)
+    ProposalNotReady = 5,
+    /// Voting threshold not met
+    ThresholdNotMet = 6,
+    /// Invalid proposal data
+    InvalidProposal = 7,
+    /// Invalid vote value
+    InvalidVote = 8,
+    /// Already voted
+    AlreadyVoted = 9,
+    /// Voting period ended
+    VotingPeriodEnded = 10,
+    /// Proposal execution failed
+    ExecutionFailed = 11,
+    /// Invalid multisig configuration
+    InvalidMultisigConfig = 12,
+    /// Not enough approvals
+    InsufficientApprovals = 13,
+    /// Proposal expired
+    ProposalExpired = 14,
 }
 
-// Define storage keys
+/// Storage keys for governance data
 #[contracttype]
+#[derive(Clone)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum GovernanceDataKey {
-    Initialized,
-    Admin,
-    Signers,
-    Threshold,
-    ProposalCount,
-    Proposal(u32),
+    /// Proposals: Map<u64, Proposal>
+    Proposal(u64),
+    /// Proposal counter
+    ProposalCounter,
+    /// Multisig admins: Vec<Address>
+    MultisigAdmins,
+    /// Multisig threshold (number of approvals required)
+    MultisigThreshold,
+    /// Proposal votes: Map<u64, Map<Address, Vote>>
+    ProposalVotes(u64),
+    /// Proposal approvals (for multisig): Map<u64, Vec<Address>>
+    ProposalApprovals(u64),
 }
 
-// Define proposal status
+/// Proposal status
 #[contracttype]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProposalStatus {
-    Pending,
+    /// Proposal is active and accepting votes
     Active,
-    Approved,
+    /// Proposal passed voting threshold
+    Passed,
+    /// Proposal failed to meet threshold
+    Failed,
+    /// Proposal executed
     Executed,
-    Cancelled,
+    /// Proposal expired
     Expired,
-    Defeated,
 }
 
-// Define action types for proposals
+/// Proposal type
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Action {
-    // Example: SetRiskParams in risk_management
-    SetRiskParams(
-        Option<i128>, // min_collateral_ratio
-        Option<i128>, // liquidation_threshold
-        Option<i128>, // close_factor
-        Option<i128>, // liquidation_incentive
-    ),
-    // Example: SetPauseSwitch
-    SetPauseSwitch(
-        Symbol, // operation
-        bool,   // paused
-    ),
-    // Example: SetEmergencyPause
-    SetEmergencyPause(
-        bool, // paused
-    ),
-    // Generic action for calling other contracts or functions
-    Call(
-        Address,               // contract_id
-        Symbol,                // function
-        soroban_sdk::Vec<Val>, // args
-    ),
-    // Upgrade contract
-    Upgrade(
-        soroban_sdk::BytesN<32>, // new_wasm_hash
-    ),
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposalType {
+    /// Change minimum collateral ratio
+    SetMinCollateralRatio(i128),
+    /// Change risk parameters (min_cr, liq_threshold, close_factor, liq_incentive)
+    SetRiskParams(Option<i128>, Option<i128>, Option<i128>, Option<i128>),
+    /// Pause/unpause operation
+    SetPauseSwitch(Symbol, bool),
+    /// Emergency pause
+    SetEmergencyPause(bool),
 }
 
-// Define proposal structure
+/// Vote type
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Vote {
+    /// Vote in favor
+    For,
+    /// Vote against
+    Against,
+    /// Abstain
+    Abstain,
+}
+
+/// Proposal structure
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Proposal {
+    /// Proposal ID
+    pub id: u64,
+    /// Proposal creator
     pub proposer: Address,
-    pub description: soroban_sdk::String,
-    pub action: Action,
-    pub created_at: u64,
-    pub voting_ends_at: u64,
-    pub grace_period_ends_at: u64,
+    /// Proposal type
+    pub proposal_type: ProposalType,
+    /// Proposal description
+    pub description: Symbol,
+    /// Current status
     pub status: ProposalStatus,
-    pub votes: u32,
-    pub executed: bool,
-    pub voters: soroban_sdk::Vec<Address>,
+    /// Voting start time
+    pub voting_start: u64,
+    /// Voting end time
+    pub voting_end: u64,
+    /// Execution timelock (when proposal can be executed after passing)
+    pub execution_timelock: u64,
+    /// Minimum voting threshold (in basis points, e.g., 5000 = 50%)
+    pub voting_threshold: i128,
+    /// Current votes for
+    pub votes_for: i128,
+    /// Current votes against
+    pub votes_against: i128,
+    /// Current votes abstain
+    pub votes_abstain: i128,
+    /// Total voting power
+    pub total_voting_power: i128,
+    /// Created timestamp
+    pub created_at: u64,
 }
 
-#[contract]
-#[allow(dead_code)]
-pub struct GovernanceContract;
+/// Constants
+const DEFAULT_VOTING_PERIOD: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
+const DEFAULT_EXECUTION_TIMELOCK: u64 = 2 * 24 * 60 * 60; // 2 days in seconds
+const DEFAULT_VOTING_THRESHOLD: i128 = 5_000; // 50% in basis points
+const BASIS_POINTS_SCALE: i128 = 10_000; // 100% = 10,000 basis points
 
-#[contractimpl]
-#[allow(dead_code)]
-impl GovernanceContract {
-    /// Initializes the governance contract.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment.
-    /// * `admin` - The initial admin address.
-    /// * `signers` - A vector of initial multisig signers.
-    /// * `threshold` - The number of required signatures for multisig.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        signers: soroban_sdk::Vec<Address>,
-        threshold: u32,
-    ) -> Result<(), GovernanceError> {
-        if env
-            .storage()
-            .instance()
-            .has(&GovernanceDataKey::Initialized)
-        {
-            return Err(GovernanceError::AlreadyInitialized);
-        }
-
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Initialized, &true);
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Signers, &signers);
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Threshold, &threshold);
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::ProposalCount, &0u32);
-
-        Ok(())
+/// Initialize governance system
+pub fn initialize_governance(env: &Env, admin: Address) -> Result<(), GovernanceError> {
+    let key = GovernanceDataKey::ProposalCounter;
+    if env.storage().persistent().has(&key) {
+        return Ok(()); // Already initialized
     }
+    env.storage().persistent().set(&key, &0u64);
+    
+    // Set default multisig threshold
+    let threshold_key = GovernanceDataKey::MultisigThreshold;
+    env.storage().persistent().set(&threshold_key, &1u32); // Default: 1 approval required
+    
+    // Initialize multisig admins with the admin
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let mut admins = Vec::new(env);
+    admins.push_back(admin);
+    env.storage().persistent().set(&admins_key, &admins);
+    
+    Ok(())
+}
 
-    /// Creates a new governance proposal.
-    ///
-    /// Only admin or existing signers can create proposals.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment.
-    /// * `proposer` - The address proposing the action.
-    /// * `description` - A description of the proposal.
-    /// * `action` - The action to be performed if the proposal passes.
-    /// * `voting_period_seconds` - The duration for voting in seconds.
-    /// * `grace_period_seconds` - The duration after voting ends during which the proposal can be executed.
-    pub fn propose(
-        env: Env,
-        proposer: Address,
-        description: soroban_sdk::String,
-        action: Action,
-        voting_period_seconds: u64,
-        grace_period_seconds: u64,
-    ) -> Result<u32, GovernanceError> {
-        // Only admin or existing signers can propose
-        // This check needs to be more robust later to verify against the stored signers
-        proposer.require_auth();
-
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)?;
-        let signers: soroban_sdk::Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if proposer != admin && !signers.contains(&proposer) {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        let mut proposal_count: u32 = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::ProposalCount)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        proposal_count = proposal_count
-            .checked_add(1)
-            .ok_or(GovernanceError::InvalidArguments)?; // Simple increment, consider overflow for very long-lived contracts
-
-        let current_time = env.ledger().timestamp();
-        let voting_ends_at = current_time
-            .checked_add(voting_period_seconds)
-            .ok_or(GovernanceError::InvalidArguments)?;
-        let grace_period_ends_at = voting_ends_at
-            .checked_add(grace_period_seconds)
-            .ok_or(GovernanceError::InvalidArguments)?;
-
-        let proposal = Proposal {
-            proposer: proposer.clone(), // Clone here to fix the moved value error
-            description: description.clone(),
-            action,
-            created_at: current_time,
-            voting_ends_at,
-            grace_period_ends_at,
-            status: ProposalStatus::Pending, // Will become active after creation
-            votes: 0,
-            executed: false,
-            voters: soroban_sdk::Vec::new(&env),
-        };
-
-        env.storage()
-            .persistent()
-            .set(&GovernanceDataKey::Proposal(proposal_count), &proposal);
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::ProposalCount, &proposal_count);
-
-        // Emit event: ProposalCreated { proposal_id, proposer, description }
-        env.events().publish(
-            (Symbol::new(&env, "PROPOSAL_CREATED"), proposal_count),
-            (proposer, description),
-        );
-
-        Ok(proposal_count)
+/// Create a new proposal
+pub fn create_proposal(
+    env: &Env,
+    proposer: Address,
+    proposal_type: ProposalType,
+    description: Symbol,
+    voting_period: Option<u64>,
+    execution_timelock: Option<u64>,
+    voting_threshold: Option<i128>,
+) -> Result<u64, GovernanceError> {
+    // Get and increment proposal counter
+    let counter_key = GovernanceDataKey::ProposalCounter;
+    let proposal_id: u64 = env
+        .storage()
+        .persistent()
+        .get(&counter_key)
+        .unwrap_or(0u64)
+        .checked_add(1)
+        .ok_or(GovernanceError::InvalidProposal)?;
+    env.storage().persistent().set(&counter_key, &proposal_id);
+    
+    let now = env.ledger().timestamp();
+    let voting_period = voting_period.unwrap_or(DEFAULT_VOTING_PERIOD);
+    let execution_timelock = execution_timelock.unwrap_or(DEFAULT_EXECUTION_TIMELOCK);
+    let voting_threshold = voting_threshold.unwrap_or(DEFAULT_VOTING_THRESHOLD);
+    
+    // Validate voting threshold
+    if voting_threshold < 0 || voting_threshold > BASIS_POINTS_SCALE {
+        return Err(GovernanceError::InvalidProposal);
     }
+    
+    let proposal = Proposal {
+        id: proposal_id,
+        proposer: proposer.clone(),
+        proposal_type,
+        description,
+        status: ProposalStatus::Active,
+        voting_start: now,
+        voting_end: now + voting_period,
+        execution_timelock: now + voting_period + execution_timelock,
+        voting_threshold,
+        votes_for: 0,
+        votes_against: 0,
+        votes_abstain: 0,
+        total_voting_power: 0,
+        created_at: now,
+    };
+    
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    env.storage().persistent().set(&proposal_key, &proposal);
+    
+    // Initialize votes map
+    let votes_key = GovernanceDataKey::ProposalVotes(proposal_id);
+    let votes_map: Map<Address, Vote> = Map::new(env);
+    env.storage().persistent().set(&votes_key, &votes_map);
+    
+    // Initialize approvals map for multisig
+    let approvals_key = GovernanceDataKey::ProposalApprovals(proposal_id);
+    let approvals: Vec<Address> = Vec::new(env);
+    env.storage().persistent().set(&approvals_key, &approvals);
+    
+    emit_proposal_created_event(env, &proposal_id, &proposer);
+    
+    Ok(proposal_id)
+}
 
-    /// Allows a signer to vote on an active proposal.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment.
-    /// * `voter` - The address casting the vote. Must be a signer.
-    /// * `proposal_id` - The ID of the proposal to vote on.
-    pub fn vote(env: Env, voter: Address, proposal_id: u32) -> Result<(), GovernanceError> {
-        voter.require_auth();
-
-        let signers: soroban_sdk::Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if !signers.contains(&voter) {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&GovernanceDataKey::Proposal(proposal_id))
-            .ok_or(GovernanceError::NotFound)?;
-
-        let current_time = env.ledger().timestamp();
-
-        if current_time > proposal.voting_ends_at {
-            // Proposal has expired for voting, but we don't change its status here.
-            // The execute function or a separate cleanup function will handle this.
-            return Err(GovernanceError::ProposalExpired);
-        }
-
-        if !(proposal.status == ProposalStatus::Pending
-            || proposal.status == ProposalStatus::Active)
-        {
-            return Err(GovernanceError::InvalidArguments); // Can only vote on pending/active proposals
-        }
-
-        // For simplicity, for now, we'll just increment a counter. A more robust solution
-        // would involve mapping voter address to proposal ID.
-
-        // Check if voter already voted
-        if proposal.voters.contains(&voter) {
-            return Err(GovernanceError::VoteAlreadyCast);
-        }
-
-        // Add voter to the list
-        proposal.voters.push_back(voter.clone());
-
-        proposal.votes = proposal
-            .votes
-            .checked_add(1)
-            .ok_or(GovernanceError::InvalidArguments)?;
-        proposal.status = ProposalStatus::Active; // Ensure it's active after the first vote
-
-        env.storage()
-            .persistent()
-            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-
-        let threshold: u32 = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Threshold)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if proposal.votes >= threshold {
-            proposal.status = ProposalStatus::Approved;
-            env.storage()
-                .persistent()
-                .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-            env.events().publish(
-                (Symbol::new(&env, "PROPOSAL_APPROVED"), proposal_id),
-                (proposal.votes,),
-            );
-        }
-
-        // Emit event: VoteCast { proposal_id, voter }
-        env.events()
-            .publish((Symbol::new(&env, "VOTE_CAST"), proposal_id), (voter,));
-
-        Ok(())
+/// Vote on a proposal
+pub fn vote(
+    env: &Env,
+    voter: Address,
+    proposal_id: u64,
+    vote: Vote,
+    voting_power: i128,
+) -> Result<(), GovernanceError> {
+    if voting_power <= 0 {
+        return Err(GovernanceError::InvalidVote);
     }
+    
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    let mut proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&proposal_key)
+        .ok_or(GovernanceError::ProposalNotFound)?;
+    
+    // Check proposal status
+    match proposal.status {
+        ProposalStatus::Active | ProposalStatus::Passed => {}
+        _ => return Err(GovernanceError::ProposalNotFound),
+    }
+    
+    // Check voting period
+    let now = env.ledger().timestamp();
+    if now > proposal.voting_end {
+        proposal.status = ProposalStatus::Expired;
+        env.storage().persistent().set(&proposal_key, &proposal);
+        return Err(GovernanceError::VotingPeriodEnded);
+    }
+    
+    // Check if already voted
+    let votes_key = GovernanceDataKey::ProposalVotes(proposal_id);
+    let mut votes_map: Map<Address, Vote> = env
+        .storage()
+        .persistent()
+        .get(&votes_key)
+        .unwrap_or(Map::new(env));
+    
+    if votes_map.contains_key(voter.clone()) {
+        return Err(GovernanceError::AlreadyVoted);
+    }
+    
+    // Record vote
+    votes_map.set(voter.clone(), vote.clone());
+    env.storage().persistent().set(&votes_key, &votes_map);
+    
+    // Update proposal vote counts
+    match vote {
+        Vote::For => proposal.votes_for += voting_power,
+        Vote::Against => proposal.votes_against += voting_power,
+        Vote::Abstain => proposal.votes_abstain += voting_power,
+    }
+    proposal.total_voting_power += voting_power;
+    
+    // Check if threshold is met
+    let threshold_votes = (proposal.total_voting_power * proposal.voting_threshold) / BASIS_POINTS_SCALE;
+    if proposal.votes_for >= threshold_votes && proposal.status == ProposalStatus::Active {
+        proposal.status = ProposalStatus::Passed;
+    }
+    
+    env.storage().persistent().set(&proposal_key, &proposal);
+    
+    emit_vote_cast_event(env, &proposal_id, &voter, &vote, &voting_power);
+    
+    Ok(())
+}
 
-    /// Executes an approved proposal.
-    ///
-    /// Can only be executed during its grace period and if it has enough votes.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment.
-    /// * `proposal_id` - The ID of the proposal to execute.
-    pub fn execute(env: Env, proposal_id: u32) -> Result<(), GovernanceError> {
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&GovernanceDataKey::Proposal(proposal_id))
-            .ok_or(GovernanceError::NotFound)?;
-
-        if proposal.executed {
-            return Err(GovernanceError::ProposalAlreadyExecuted);
-        }
-
-        let current_time = env.ledger().timestamp();
-        if current_time < proposal.voting_ends_at {
-            return Err(GovernanceError::NotYetTime); // Not past voting period
-        }
-        if current_time > proposal.grace_period_ends_at {
-            proposal.status = ProposalStatus::Expired;
-            env.storage()
-                .persistent()
-                .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-            env.events().publish(
-                (Symbol::new(&env, "PROPOSAL_EXPIRED"), proposal_id),
-                (proposal.proposer,),
-            );
-            return Err(GovernanceError::ProposalExpired);
-        }
-
-        let threshold: u32 = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Threshold)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if proposal.votes < threshold {
-            proposal.status = ProposalStatus::Defeated;
-            env.storage()
-                .persistent()
-                .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-            env.events()
-                .publish((Symbol::new(&env, "PROPOSAL_DEFEATED"), proposal_id), ());
-            return Err(GovernanceError::InsufficientVotes);
-        }
-
-        // Perform the action
-        match proposal.action.clone() {
-            Action::SetRiskParams(
-                _min_collateral_ratio,
-                _liquidation_threshold,
-                _close_factor,
-                _liquidation_incentive,
-            ) => {
-                env.events().publish(
-                    (Symbol::new(&env, "ACTION_EXECUTED"), proposal_id),
-                    Symbol::new(&env, "SetRiskParams"),
-                );
+/// Execute a proposal
+pub fn execute_proposal(env: &Env, executor: Address, proposal_id: u64) -> Result<(), GovernanceError> {
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    let mut proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&proposal_key)
+        .ok_or(GovernanceError::ProposalNotFound)?;
+    
+    // Check proposal status
+    match proposal.status {
+        ProposalStatus::Passed => {}
+        ProposalStatus::Executed => return Err(GovernanceError::ProposalAlreadyExecuted),
+        ProposalStatus::Failed => return Err(GovernanceError::ProposalAlreadyFailed),
+        ProposalStatus::Expired => return Err(GovernanceError::ProposalExpired),
+        ProposalStatus::Active => {
+            // Check if threshold is met
+            let threshold_votes = (proposal.total_voting_power * proposal.voting_threshold) / BASIS_POINTS_SCALE;
+            if proposal.votes_for < threshold_votes {
+                proposal.status = ProposalStatus::Failed;
+                env.storage().persistent().set(&proposal_key, &proposal);
+                return Err(GovernanceError::ThresholdNotMet);
             }
-            Action::SetPauseSwitch(operation, paused) => {
-                env.events().publish(
-                    (Symbol::new(&env, "ACTION_EXECUTED"), proposal_id),
-                    (Symbol::new(&env, "SetPauseSwitch"), operation, paused),
-                );
-            }
-            Action::SetEmergencyPause(paused) => {
-                env.events().publish(
-                    (Symbol::new(&env, "ACTION_EXECUTED"), proposal_id),
-                    (Symbol::new(&env, "SetEmergencyPause"), paused),
-                );
-            }
-            Action::Call(contract_id, function, args) => {
-                env.invoke_contract::<Val>(&contract_id, &function, args);
-                env.events().publish(
-                    (Symbol::new(&env, "ACTION_EXECUTED"), proposal_id),
-                    (Symbol::new(&env, "Call"), contract_id, function),
-                );
-            }
-            Action::Upgrade(new_wasm_hash) => {
-                env.deployer()
-                    .update_current_contract_wasm(new_wasm_hash.clone());
-                env.events().publish(
-                    (Symbol::new(&env, "ACTION_EXECUTED"), proposal_id),
-                    (Symbol::new(&env, "Upgrade"), new_wasm_hash),
-                );
-            }
+            proposal.status = ProposalStatus::Passed;
         }
+    }
+    
+    // Check timelock
+    let now = env.ledger().timestamp();
+    if now < proposal.execution_timelock {
+        return Err(GovernanceError::ProposalNotReady);
+    }
+    
+    // Mark as executed
+    proposal.status = ProposalStatus::Executed;
+    env.storage().persistent().set(&proposal_key, &proposal);
+    
+    emit_proposal_executed_event(env, &proposal_id, &executor);
+    
+    Ok(())
+}
 
-        proposal.status = ProposalStatus::Executed;
-        proposal.executed = true;
-        env.storage()
-            .persistent()
-            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-
-        env.events()
-            .publish((Symbol::new(&env, "PROPOSAL_EXECUTED"), proposal_id), ());
-
+/// Mark proposal as failed (if voting period ended without meeting threshold)
+pub fn mark_proposal_failed(env: &Env, proposal_id: u64) -> Result<(), GovernanceError> {
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    let mut proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&proposal_key)
+        .ok_or(GovernanceError::ProposalNotFound)?;
+    
+    if proposal.status != ProposalStatus::Active {
+        return Err(GovernanceError::ProposalNotFound);
+    }
+    
+    let now = env.ledger().timestamp();
+    if now <= proposal.voting_end {
+        return Err(GovernanceError::VotingPeriodEnded);
+    }
+    
+    // Check if threshold was met
+    let threshold_votes = (proposal.total_voting_power * proposal.voting_threshold) / BASIS_POINTS_SCALE;
+    if proposal.votes_for < threshold_votes {
+        proposal.status = ProposalStatus::Failed;
+        env.storage().persistent().set(&proposal_key, &proposal);
+        emit_proposal_failed_event(env, &proposal_id);
+        Ok(())
+    } else {
+        proposal.status = ProposalStatus::Passed;
+        env.storage().persistent().set(&proposal_key, &proposal);
         Ok(())
     }
+}
 
-    /// Retrieves a proposal by its ID.
-    pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, GovernanceError> {
-        env.storage()
-            .persistent()
-            .get(&GovernanceDataKey::Proposal(proposal_id))
-            .ok_or(GovernanceError::NotFound)
+/// Get proposal
+pub fn get_proposal(env: &Env, proposal_id: u64) -> Option<Proposal> {
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    env.storage().persistent().get(&proposal_key)
+}
+
+/// Get vote for a voter on a proposal
+pub fn get_vote(env: &Env, proposal_id: u64, voter: Address) -> Option<Vote> {
+    let votes_key = GovernanceDataKey::ProposalVotes(proposal_id);
+    let votes_map: Map<Address, Vote> = env.storage().persistent().get(&votes_key)?;
+    votes_map.get(voter)
+}
+
+// ============================================================================
+// Multisig Operations
+// ============================================================================
+
+/// Set multisig admins
+pub fn set_multisig_admins(env: &Env, caller: Address, admins: Vec<Address>) -> Result<(), GovernanceError> {
+    // Check if caller is current admin
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let current_admins: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&admins_key)
+        .ok_or(GovernanceError::Unauthorized)?;
+    
+    if !current_admins.contains(caller.clone()) {
+        return Err(GovernanceError::Unauthorized);
     }
-
-    /// Adds a new signer to the multisig.
-    ///
-    /// Only the current admin can add signers.
-    pub fn add_signer(
-        env: Env,
-        caller: Address,
-        new_signer: Address,
-    ) -> Result<(), GovernanceError> {
-        caller.require_auth();
-
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if caller != admin {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        let mut signers: soroban_sdk::Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if signers.contains(&new_signer) {
-            return Err(GovernanceError::SignerAlreadyExists);
-        }
-
-        signers.push_back(new_signer.clone());
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Signers, &signers);
-
-        env.events().publish(
-            (Symbol::new(&env, "SIGNER_ADDED"), new_signer.clone()),
-            (caller,),
-        );
-
-        Ok(())
+    
+    if admins.len() == 0 {
+        return Err(GovernanceError::InvalidMultisigConfig);
     }
+    
+    env.storage().persistent().set(&admins_key, &admins);
+    Ok(())
+}
 
-    /// Removes a signer from the multisig.
-    ///
-    /// Only the current admin can remove signers. A signer cannot remove themselves.
-    pub fn remove_signer(
-        env: Env,
-        caller: Address,
-        signer_to_remove: Address,
-    ) -> Result<(), GovernanceError> {
-        caller.require_auth();
-
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if caller != admin {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        if caller == signer_to_remove {
-            return Err(GovernanceError::CannotSelfRemove);
-        }
-
-        let signers: soroban_sdk::Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        let mut found = false;
-        let mut new_signers = soroban_sdk::Vec::new(&env);
-        for signer in signers.into_iter() {
-            if signer != signer_to_remove {
-                new_signers.push_back(signer);
-            } else {
-                found = true;
-            }
-        }
-
-        if !found {
-            return Err(GovernanceError::SignerNotFound);
-        }
-
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Signers, &new_signers);
-
-        env.events().publish(
-            (
-                Symbol::new(&env, "SIGNER_REMOVED"),
-                signer_to_remove.clone(),
-            ),
-            (caller,),
-        );
-
-        Ok(())
+/// Set multisig threshold
+pub fn set_multisig_threshold(env: &Env, caller: Address, threshold: u32) -> Result<(), GovernanceError> {
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let admins: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&admins_key)
+        .ok_or(GovernanceError::Unauthorized)?;
+    
+    if !admins.contains(caller.clone()) {
+        return Err(GovernanceError::Unauthorized);
     }
-
-    /// Sets the multisig threshold.
-    ///
-    /// Only the current admin can set the threshold.
-    /// The threshold cannot be greater than the number of current signers.
-    pub fn set_threshold(
-        env: Env,
-        caller: Address,
-        new_threshold: u32,
-    ) -> Result<(), GovernanceError> {
-        caller.require_auth();
-
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if caller != admin {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        let signers: soroban_sdk::Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if new_threshold == 0 || new_threshold > signers.len() {
-            return Err(GovernanceError::InvalidArguments);
-        }
-
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Threshold, &new_threshold);
-
-        env.events().publish(
-            (Symbol::new(&env, "THRESHOLD_SET"), new_threshold),
-            (caller,),
-        );
-
-        Ok(())
+    
+    if threshold == 0 || threshold > admins.len() as u32 {
+        return Err(GovernanceError::InvalidMultisigConfig);
     }
+    
+    let threshold_key = GovernanceDataKey::MultisigThreshold;
+    env.storage().persistent().set(&threshold_key, &threshold);
+    Ok(())
+}
 
-    /// Gets the current multisig signers.
-    pub fn get_signers(env: Env) -> Result<soroban_sdk::Vec<Address>, GovernanceError> {
-        env.storage()
-            .instance()
-            .get(&GovernanceDataKey::Signers)
-            .ok_or(GovernanceError::NotInitialized)
+/// Propose setting minimum collateral ratio (multisig)
+pub fn propose_set_min_collateral_ratio(
+    env: &Env,
+    proposer: Address,
+    new_ratio: i128,
+) -> Result<u64, GovernanceError> {
+    // Check if proposer is multisig admin
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let admins: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&admins_key)
+        .ok_or(GovernanceError::Unauthorized)?;
+    
+    if !admins.contains(proposer.clone()) {
+        return Err(GovernanceError::Unauthorized);
     }
+    
+    let proposal_type = ProposalType::SetMinCollateralRatio(new_ratio);
+    let description = Symbol::new(env, "set_min_collateral_ratio");
+    
+    create_proposal(env, proposer, proposal_type, description, None, None, None)
+}
 
-    /// Gets the current multisig threshold.
-    pub fn get_threshold(env: Env) -> Result<u32, GovernanceError> {
-        env.storage()
-            .instance()
-            .get(&GovernanceDataKey::Threshold)
-            .ok_or(GovernanceError::NotInitialized)
+/// Approve a multisig proposal
+pub fn approve_proposal(env: &Env, approver: Address, proposal_id: u64) -> Result<(), GovernanceError> {
+    // Check if approver is multisig admin
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let admins: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&admins_key)
+        .ok_or(GovernanceError::Unauthorized)?;
+    
+    if !admins.contains(approver.clone()) {
+        return Err(GovernanceError::Unauthorized);
     }
-
-    /// Gets the current admin.
-    pub fn get_admin(env: Env) -> Result<Address, GovernanceError> {
-        env.storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)
+    
+    // Check proposal exists
+    let proposal_key = GovernanceDataKey::Proposal(proposal_id);
+    let _proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&proposal_key)
+        .ok_or(GovernanceError::ProposalNotFound)?;
+    
+    // Get approvals
+    let approvals_key = GovernanceDataKey::ProposalApprovals(proposal_id);
+    let mut approvals: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&approvals_key)
+        .unwrap_or(Vec::new(env));
+    
+    // Check if already approved
+    if approvals.contains(approver.clone()) {
+        return Err(GovernanceError::AlreadyVoted);
     }
+    
+    // Add approval
+    approvals.push_back(approver.clone());
+    env.storage().persistent().set(&approvals_key, &approvals);
+    
+    emit_approval_event(env, &proposal_id, &approver);
+    
+    Ok(())
+}
 
-    /// Transfers admin ownership to a new address.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment.
-    /// * `caller` - The address initiating the transfer. Must be the current admin.
-    /// * `new_admin` - The address of the new admin.
-    pub fn transfer_admin(
-        env: Env,
-        caller: Address,
-        new_admin: Address,
-    ) -> Result<(), GovernanceError> {
-        caller.require_auth();
-
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&GovernanceDataKey::Admin)
-            .ok_or(GovernanceError::NotInitialized)?;
-
-        if caller != admin {
-            return Err(GovernanceError::Unauthorized);
-        }
-
-        env.storage()
-            .instance()
-            .set(&GovernanceDataKey::Admin, &new_admin);
-
-        env.events().publish(
-            (Symbol::new(&env, "ADMIN_TRANSFERRED"), new_admin.clone()),
-            (caller,),
-        );
-
-        Ok(())
+/// Execute a multisig proposal
+pub fn execute_multisig_proposal(env: &Env, executor: Address, proposal_id: u64) -> Result<(), GovernanceError> {
+    // Check if executor is multisig admin
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    let admins: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&admins_key)
+        .ok_or(GovernanceError::Unauthorized)?;
+    
+    if !admins.contains(executor.clone()) {
+        return Err(GovernanceError::Unauthorized);
     }
+    
+    // Get threshold
+    let threshold_key = GovernanceDataKey::MultisigThreshold;
+    let threshold: u32 = env
+        .storage()
+        .persistent()
+        .get(&threshold_key)
+        .unwrap_or(1u32);
+    
+    // Get approvals
+    let approvals_key = GovernanceDataKey::ProposalApprovals(proposal_id);
+    let approvals: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&approvals_key)
+        .unwrap_or(Vec::new(env));
+    
+    if (approvals.len() as u32) < threshold {
+        return Err(GovernanceError::InsufficientApprovals);
+    }
+    
+    // Execute the proposal
+    execute_proposal(env, executor, proposal_id)
+}
+
+/// Get multisig admins
+pub fn get_multisig_admins(env: &Env) -> Option<Vec<Address>> {
+    let admins_key = GovernanceDataKey::MultisigAdmins;
+    env.storage().persistent().get(&admins_key)
+}
+
+/// Get multisig threshold
+pub fn get_multisig_threshold(env: &Env) -> u32 {
+    let threshold_key = GovernanceDataKey::MultisigThreshold;
+    env.storage()
+        .persistent()
+        .get(&threshold_key)
+        .unwrap_or(1u32)
+}
+
+/// Get proposal approvals
+pub fn get_proposal_approvals(env: &Env, proposal_id: u64) -> Option<Vec<Address>> {
+    let approvals_key = GovernanceDataKey::ProposalApprovals(proposal_id);
+    env.storage().persistent().get(&approvals_key)
+}
+
+// ============================================================================
+// Events
+// ============================================================================
+
+fn emit_proposal_created_event(env: &Env, proposal_id: &u64, proposer: &Address) {
+    let topics = (
+        Symbol::new(env, "proposal_created"),
+        proposal_id.clone(),
+        proposer.clone(),
+    );
+    env.events().publish(topics, ());
+}
+
+fn emit_vote_cast_event(env: &Env, proposal_id: &u64, voter: &Address, vote: &Vote, voting_power: &i128) {
+    let topics = (
+        Symbol::new(env, "vote_cast"),
+        proposal_id.clone(),
+        voter.clone(),
+    );
+    env.events().publish(topics, (vote.clone(), voting_power.clone()));
+}
+
+fn emit_proposal_executed_event(env: &Env, proposal_id: &u64, executor: &Address) {
+    let topics = (
+        Symbol::new(env, "proposal_executed"),
+        proposal_id.clone(),
+        executor.clone(),
+    );
+    env.events().publish(topics, ());
+}
+
+fn emit_proposal_failed_event(env: &Env, proposal_id: &u64) {
+    let topics = (Symbol::new(env, "proposal_failed"), proposal_id.clone());
+    env.events().publish(topics, ());
+}
+
+fn emit_approval_event(env: &Env, proposal_id: &u64, approver: &Address) {
+    let topics = (
+        Symbol::new(env, "proposal_approved"),
+        proposal_id.clone(),
+        approver.clone(),
+    );
+    env.events().publish(topics, ());
 }

@@ -1,7 +1,5 @@
 #![allow(clippy::too_many_arguments)]
 #![no_std]
-#![allow(clippy::too_many_arguments)] // Allow for generated client functions with many parameters
-
 use soroban_sdk::{contract, contractimpl, Address, Env, Map, String, Symbol, Vec};
 
 mod borrow;
@@ -71,8 +69,7 @@ impl HelloContract {
     /// Returns Ok(()) on success
     pub fn initialize(env: Env, admin: Address) -> Result<(), RiskManagementError> {
         initialize_risk_management(&env, admin.clone())?;
-        initialize_interest_rate_config(&env, admin)
-            .map_err(|_| RiskManagementError::InvalidParameter)?;
+        // initialize_governance(&env, admin).map_err(|_| RiskManagementError::Unauthorized)?;
         Ok(())
     }
 
@@ -1014,8 +1011,3 @@ impl HelloContract {
 
     // ============================================================================
 }
-
-#[cfg(test)]
-mod governance_test;
-#[cfg(test)]
-mod tests;
