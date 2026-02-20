@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 //! # Flash Loan Test Suite
 //!
 //! Comprehensive tests for flash loan functionality including:
@@ -10,10 +8,7 @@
 //! - Admin fee configuration (set_fee_bps)
 //! - Security assumptions (reentrancy, pause, limits)
 
-use soroban_sdk::{
-    testutils::Address as _,
-    token, Address, Env, Map, Symbol,
-};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, Map, Symbol};
 
 use crate::flash_loan::{
     configure_flash_loan, execute_flash_loan, repay_flash_loan, set_flash_loan_fee,
@@ -36,9 +31,7 @@ fn setup_env() -> (Env, Address, Address, Address, Address) {
 
     // Set admin in contract context
     env.as_contract(&contract_id, || {
-        env.storage()
-            .persistent()
-            .set(&RiskDataKey::Admin, &admin);
+        env.storage().persistent().set(&RiskDataKey::Admin, &admin);
     });
 
     (env, contract_id, admin, user, token_address)
@@ -63,7 +56,13 @@ fn test_flash_loan_success() {
     let callback = Address::generate(&env);
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
     });
 
     assert!(result.is_ok());
@@ -79,7 +78,14 @@ fn test_flash_loan_repayment_success() {
     let token_std_client = token::TokenClient::new(&env, &token_address);
 
     let total = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback).unwrap()
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
+        .unwrap()
     });
 
     token_client.mint(&user, &(total * 2));
@@ -106,8 +112,14 @@ fn test_default_fee_calculation() {
 
     for (amount, expected_fee) in cases {
         let total = env.as_contract(&contract_id, || {
-            execute_flash_loan(&env, user.clone(), token_address.clone(), amount, callback.clone())
-                .unwrap()
+            execute_flash_loan(
+                &env,
+                user.clone(),
+                token_address.clone(),
+                amount,
+                callback.clone(),
+            )
+            .unwrap()
         });
 
         assert_eq!(total, amount + expected_fee);
@@ -131,7 +143,14 @@ fn test_custom_fee_calculation() {
     });
 
     let total = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback).unwrap()
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
+        .unwrap()
     });
 
     assert_eq!(total, 1_005_000); // 1M + 5K fee
@@ -148,7 +167,14 @@ fn test_zero_fee() {
     });
 
     let total = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback).unwrap()
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
+        .unwrap()
     });
 
     assert_eq!(total, 1_000_000);
@@ -179,7 +205,14 @@ fn test_insufficient_repayment() {
     let token_std_client = token::TokenClient::new(&env, &token_address);
 
     let total = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback).unwrap()
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
+        .unwrap()
     });
 
     let insufficient = total - 100;
@@ -200,7 +233,14 @@ fn test_insufficient_user_balance() {
     let callback = Address::generate(&env);
 
     let total = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback).unwrap()
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
+        .unwrap()
     });
 
     let result = env.as_contract(&contract_id, || {
@@ -220,7 +260,13 @@ fn test_invalid_callback_self() {
     let (env, contract_id, _admin, user, token_address) = setup_with_balance(10_000_000);
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, contract_id.clone())
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            contract_id.clone(),
+        )
     });
 
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidCallback);
@@ -233,7 +279,13 @@ fn test_valid_callback() {
     let callback = Address::generate(&env);
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback.clone())
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback.clone(),
+        )
     });
 
     assert!(result.is_ok());
@@ -259,9 +311,7 @@ fn test_valid_callback() {
 fn test_set_fee_bps_admin() {
     let (env, contract_id, admin, _user, _token_address) = setup_env();
 
-    let result = env.as_contract(&contract_id, || {
-        set_flash_loan_fee(&env, admin, 25)
-    });
+    let result = env.as_contract(&contract_id, || set_flash_loan_fee(&env, admin, 25));
 
     assert!(result.is_ok());
 
@@ -281,9 +331,7 @@ fn test_set_fee_bps_admin() {
 fn test_set_fee_bps_non_admin() {
     let (env, contract_id, _admin, user, _token_address) = setup_env();
 
-    let result = env.as_contract(&contract_id, || {
-        set_flash_loan_fee(&env, user, 25)
-    });
+    let result = env.as_contract(&contract_id, || set_flash_loan_fee(&env, user, 25));
 
     assert!(result.is_err());
 }
@@ -300,9 +348,7 @@ fn test_set_fee_bps_invalid() {
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidAmount);
 
     // Negative fee
-    let result = env.as_contract(&contract_id, || {
-        set_flash_loan_fee(&env, admin, -1)
-    });
+    let result = env.as_contract(&contract_id, || set_flash_loan_fee(&env, admin, -1));
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidAmount);
 }
 
@@ -311,9 +357,7 @@ fn test_set_fee_bps_invalid() {
 fn test_set_fee_bps_maximum() {
     let (env, contract_id, admin, _user, _token_address) = setup_env();
 
-    let result = env.as_contract(&contract_id, || {
-        set_flash_loan_fee(&env, admin, 10_000)
-    });
+    let result = env.as_contract(&contract_id, || set_flash_loan_fee(&env, admin, 10_000));
 
     assert!(result.is_ok());
 }
@@ -329,12 +373,24 @@ fn test_reentrancy_protection() {
     let callback = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback.clone())
-            .unwrap();
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback.clone(),
+        )
+        .unwrap();
     });
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
     });
 
     assert_eq!(result.unwrap_err(), FlashLoanError::Reentrancy);
@@ -354,7 +410,13 @@ fn test_pause_flash_loan() {
     });
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
     });
 
     assert_eq!(result.unwrap_err(), FlashLoanError::FlashLoanPaused);
@@ -367,7 +429,13 @@ fn test_insufficient_liquidity() {
     let callback = Address::generate(&env);
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 1_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            callback,
+        )
     });
 
     assert_eq!(result.unwrap_err(), FlashLoanError::InsufficientLiquidity);
@@ -393,7 +461,13 @@ fn test_invalid_amount_negative() {
     let callback = Address::generate(&env);
 
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), -1_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            -1_000_000,
+            callback,
+        )
     });
 
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidAmount);
@@ -429,19 +503,37 @@ fn test_configuration_limits() {
 
     // Below minimum
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 500, callback.clone())
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            500,
+            callback.clone(),
+        )
     });
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidAmount);
 
     // Above maximum
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 20_000_000, callback.clone())
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            20_000_000,
+            callback.clone(),
+        )
     });
     assert_eq!(result.unwrap_err(), FlashLoanError::InvalidAmount);
 
     // Within limits
     let result = env.as_contract(&contract_id, || {
-        execute_flash_loan(&env, user.clone(), token_address.clone(), 5_000_000, callback)
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            5_000_000,
+            callback,
+        )
     });
     assert!(result.is_ok());
 }
